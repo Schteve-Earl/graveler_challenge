@@ -35,7 +35,7 @@ __global__ void simulateRolls(int *max_ones, unsigned long long num_sessions, in
 }
 
 int main() {
-    unsigned long long num_sessions = 1'000'000;
+    unsigned long long num_sessions = 1'000'000'000;
     int h_max_ones = 0;
     int *d_max_ones;
 
