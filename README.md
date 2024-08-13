@@ -1,2 +1,2 @@
 # graveler_challenge
-![image](https://github.com/user-attachments/assets/0e456770-1a58-4d92-bc34-a6ab118ee891)
+![image](https://github.com/user-attachments/assets/9c11ad13-d026-4f2e-be10-37593e7395b6)
