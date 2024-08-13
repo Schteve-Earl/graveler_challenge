@@ -1,76 +1,86 @@
+#include <cuda_runtime.h>
 #include <curand_kernel.h>
 #include <iostream>
+#include <iomanip>  // For std::fixed and std::setprecision
 #include <chrono>
 
+#define NUM_ITEMS 4
+#define NUM_ROLLS 231
 #define THREADS_PER_BLOCK 256
-#define ROLLS_PER_SESSION 231
-#define TARGET_COUNT 171
 
-__global__ void simulateRolls(int *max_ones, unsigned long long num_sessions, int seed) {
-    unsigned long long idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx >= num_sessions) return;
+__global__ void simulateRolls(int *maxOnes, long long numSimulations, int seed) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    long long step = gridDim.x * blockDim.x;
 
-    // Initialize random number generator
+    // Initialize random state for each thread
     curandState state;
     curand_init(seed, idx, 0, &state);
 
-    // Counter for ones
-    int count_ones = 0;
+    for (long long i = idx; i < numSimulations; i += step) {
+        int counts[NUM_ITEMS] = {0, 0, 0, 0};
 
-    // Simulate a session
-    for (int i = 0; i < ROLLS_PER_SESSION; ++i) {
-        int roll = curand(&state) % 4; // Random roll between 0 and 3
-        if (roll == 0) {
-            count_ones++;
+        for (int j = 0; j < NUM_ROLLS; j++) {
+            int roll = curand(&state) % NUM_ITEMS; // Get a random number in [0, NUM_ITEMS)
+            counts[roll]++;
+            
+            // Early exit if the remaining rolls cannot reach a new max
+            if (counts[0] + (NUM_ROLLS - j - 1) < *maxOnes) {
+                break;
+            }
         }
 
-        // Early termination if reaching 171 ones is impossible
-        if (ROLLS_PER_SESSION - i - 1 + count_ones < TARGET_COUNT) {
-            break;
-        }
+        // Update the maximum number of ones rolled
+        atomicMax(maxOnes, counts[0]);
     }
+}
 
-    // Update the global maximum number of ones
-    atomicMax(max_ones, count_ones);
+void checkCuda(cudaError_t result) {
+    if (result != cudaSuccess) {
+        std::cerr << "CUDA Error: " << cudaGetErrorString(result) << std::endl;
+        exit(EXIT_FAILURE);
+    }
 }
 
 int main() {
-    unsigned long long num_sessions = 1'000'000'000;
-    int h_max_ones = 0;
-    int *d_max_ones;
+    // Start total execution timing
+    auto total_start = std::chrono::high_resolution_clock::now();
 
-    // Allocate device memory
-    cudaMalloc(&d_max_ones, sizeof(int));
-    cudaMemcpy(d_max_ones, &h_max_ones, sizeof(int), cudaMemcpyHostToDevice);
+    long long numSimulations = 1000000000; // 1,000,000,000
+    int *d_maxOnes, h_maxOnes = 0;
 
-    // Calculate number of blocks
-    unsigned long long num_blocks = (num_sessions + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
+    // Query device properties to determine max blocks
+    cudaDeviceProp prop;
+    checkCuda(cudaGetDeviceProperties(&prop, 0));
 
-    // Start timing
-    auto start_time = std::chrono::high_resolution_clock::now();
+    int maxThreadsPerBlock = prop.maxThreadsPerBlock;
+    int maxBlocks = prop.multiProcessorCount * (prop.maxThreadsPerMultiProcessor / THREADS_PER_BLOCK);
+    std::cout << "Launching with " << maxBlocks << " blocks and " << THREADS_PER_BLOCK << " threads per block." << std::endl;
 
-    // Launch the kernel
-    simulateRolls<<<num_blocks, THREADS_PER_BLOCK>>>(d_max_ones, num_sessions, time(NULL));
+    checkCuda(cudaMalloc(&d_maxOnes, sizeof(int)));
+    checkCuda(cudaMemset(d_maxOnes, 0, sizeof(int)));
 
-    // Synchronize device
-    cudaDeviceSynchronize();
+    // Start kernel execution timing
+    auto kernel_start = std::chrono::high_resolution_clock::now();
 
-    // End timing
-    auto end_time = std::chrono::high_resolution_clock::now();
+    // Launch kernel
+    simulateRolls<<<maxBlocks, THREADS_PER_BLOCK>>>(d_maxOnes, numSimulations, std::rand());
+    checkCuda(cudaDeviceSynchronize());
 
-    // Copy result back to host
-    cudaMemcpy(&h_max_ones, d_max_ones, sizeof(int), cudaMemcpyDeviceToHost);
+    // End kernel execution timing
+    auto kernel_end = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double> kernel_elapsed = kernel_end - kernel_start;
 
-    // Free device memory
-    cudaFree(d_max_ones);
+    checkCuda(cudaMemcpy(&h_maxOnes, d_maxOnes, sizeof(int), cudaMemcpyDeviceToHost));
 
-    // Calculate the duration
-    std::chrono::duration<double> elapsed = end_time - start_time;
-    
-    // Print result
-    std::cout << "Highest Ones Roll: " << h_max_ones << std::endl;
-    std::cout << "Number of Roll Sessions: " << num_sessions << std::endl;
-    std::cout << "Elapsed Time: " << elapsed.count() << " seconds" << std::endl;
+    cudaFree(d_maxOnes);
+
+    // End total execution timing
+    auto total_end = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double> total_elapsed = total_end - total_start;
+
+    std::cout << "Highest Ones Roll: " << h_maxOnes << std::endl;
+    std::cout << "Kernel execution time: " << std::fixed << std::setprecision(6) << kernel_elapsed.count() << " seconds" << std::endl;
+    std::cout << "Total execution time: " << std::fixed << std::setprecision(6) << total_elapsed.count() << " seconds" << std::endl;
 
     return 0;
 }
