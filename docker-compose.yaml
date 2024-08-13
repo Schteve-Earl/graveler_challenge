@@ -1,0 +1,13 @@
+version: '3.9'
+
+services:
+  graveler_challenge:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [gpu]
+    runtime: nvidia
